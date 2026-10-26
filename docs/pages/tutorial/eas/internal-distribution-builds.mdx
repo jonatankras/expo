@@ -1,217 +1,363 @@
----
-title: Create and share internal distribution build
-sidebar_title: Internal distribution build
-description: Learn about internal distribution builds, why we need them, and how to create them.
-hasVideoLink: true
----
+import React, { useState, useRef } from 'react';
+import {
+  StyleSheet,
+  Text,
+  View,
+  TouchableOpacity,
+  ScrollView,
+  TextInput,
+  PanResponder,
+  Animated,
+  SafeAreaView,
+  Image,
+} from 'react-native';
+import { CameraView, useCameraPermissions } from 'expo-camera';
+import * as MediaLibrary from 'expo-media-library';
+import * as Haptics from 'expo-haptics';
+import * as FileSystem from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
+import * as XLSX from 'xlsx';
 
-import { Collapsible } from '~/ui/components/Collapsible';
-import { ContentSpotlight } from '~/ui/components/ContentSpotlight';
-import { ProgressTracker } from '~/ui/components/ProgressTracker';
-import { Terminal } from '~/ui/components/Snippet';
-import { Step } from '~/ui/components/Step';
-import { Tabs, Tab } from '~/ui/components/Tabs';
-import { CODE } from '~/ui/components/Text';
-import { VideoBoxLink } from '~/ui/components/VideoBoxLink';
+const COLS = ['A', 'B', 'C', 'D', 'E'];
 
-In this chapter, we'll learn how to set up [internal distribution builds](/build/internal-distribution/#using-internal-distribution).
-
-<VideoBoxLink
-  videoId="1fQuGLHxWks"
-  title="Watch: How to create and share an internal distribution build"
-  description="Create an internal distribution build with EAS and share it directly with your team for testing."
-/>
-
----
-
-## Internal distribution build
-
-Internal distribution builds are ideal for sharing updates with team members, allowing both technical and non-technical stakeholders to provide feedback directly. Unlike development builds, these do not require running a development server, simplifying the testing process.
-
-### Ways to distribute an app internally
-
-Both Google and Apple provide built-in mechanisms for sharing apps internally:
-
-- **Android**: Using Google Play beta
-- **iOS**: Using TestFlight
-
-However, both of these traditional methods have their limitations. For example, TestFlight limits to one active build at a time.
-
-### EAS Build for faster distribution
-
-EAS Build speeds up the process. It creates shareable links for our builds and provides instructions on using them. It has a default configuration designed to facilitate internal distribution, offering a more efficient alternative to traditional methods.
-
-## Create an internal distribution build
-
-To create and distribute a build with EAS Build, we need to follow these steps:
-
-<Step label="1">
-
-### Configure preview build profile
-
-From our initial setup in **eas.json**, we already have a default configuration that includes a `preview` build profile designed for internal distribution:
-
-```json eas.json
-{
-  "build": {
-    "preview": {
-      /* @info The `distribution` in `preview` profile has its value set to `internal`. */
-      "distribution": "internal"
-      /* @end */
-    }
-  }
+interface OcrChip {
+  id: string;
+  text: string;
+  cleanValue: string;
+  category: 'code' | 'description' | 'quantity' | 'currency' | 'date';
+  x: number;
+  y: number;
+  w: number;
+  h: number;
 }
-```
 
-This is all we need to create our first internal distribution build. The `preview` build profile from the above snippet has a `distribution` property whose value is set to `internal`. This value allows us to share our build URLs with anyone so they can install it on their device and do not require a development server to run the app.
+interface CellItem {
+  raw: string;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  align?: 'left' | 'center' | 'right';
+  format?: 'general' | 'currency' | 'number';
+}
 
-As discussed in the previous chapters, for non-app store builds, Android requires **.apk** and iOS needs **.ipa** formats. This applies to internal distribution builds as well. The `distribution` when set to `internal`, automatically creates the app binary in these file formats for devices.
+const INITIAL_OCR_CHIPS: OcrChip[] = [
+  { id: 'c1', text: '98413', cleanValue: '98413', category: 'code', x: 5, y: 22, w: 20, h: 14 },
+  { id: 'c2', text: 'Adaptador Inox', cleanValue: 'Adaptador Inox', category: 'description', x: 28, y: 22, w: 40, h: 14 },
+  { id: 'c3', text: '24', cleanValue: '24', category: 'quantity', x: 70, y: 22, w: 14, h: 14 },
+  { id: 'c4', text: 'R$ 45,90', cleanValue: '45.90', category: 'currency', x: 5, y: 44, w: 28, h: 14 },
+  { id: 'c5', text: '98414', cleanValue: '98414', category: 'code', x: 5, y: 66, w: 20, h: 14 },
+  { id: 'c6', text: 'Parafuso M12', cleanValue: 'Parafuso M12', category: 'description', x: 28, y: 66, w: 40, h: 14 },
+  { id: 'c7', text: '120', cleanValue: '120', category: 'quantity', x: 70, y: 66, w: 14, h: 14 },
+];
 
-</Step>
+export default function App() {
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+  const [mediaPermission, requestMediaPermission] = MediaLibrary.usePermissions();
+  const cameraRef = useRef<CameraView>(null);
 
-<Step label="2">
+  // Passo 1: Célula A3 (row 2, col 0) selecionada inicialmente
+  const [grid, setGrid] = useState<CellItem[][]>(() => {
+    const rows: CellItem[][] = Array.from({ length: 12 }, (_, r) =>
+      Array.from({ length: 5 }, (__, c) => ({
+        raw: '',
+        align: c >= 2 ? 'right' : 'left',
+        format: c >= 3 ? 'currency' : c === 2 ? 'number' : 'general',
+      }))
+    );
+    rows[0] = [
+      { raw: 'Código', bold: true },
+      { raw: 'Descrição', bold: true },
+      { raw: 'Qtd', bold: true, align: 'right' },
+      { raw: 'Preço Unit.', bold: true, align: 'right' },
+      { raw: 'Subtotal', bold: true, align: 'right' },
+    ];
+    rows[1] = [
+      { raw: '98412', bold: true },
+      { raw: 'Cabo USB-C 2m' },
+      { raw: '15', align: 'right', format: 'number' },
+      { raw: '28.50', align: 'right', format: 'currency' },
+      { raw: '=C2*D2', align: 'right', format: 'currency', bold: true },
+    ];
+    for (let r = 2; r < 10; r++) {
+      rows[r][4] = { raw: `=C${r + 1}*D${r + 1}`, align: 'right', format: 'currency' };
+    }
+    return rows;
+  });
 
-### Create
+  const [activeCell, setActiveCell] = useState({ row: 2, col: 0 });
+  const [autoAdvance, setAutoAdvance] = useState<'row' | 'col'>('row');
+  const [showRibbon, setShowRibbon] = useState(true);
+  const [activeTab, setActiveTab] = useState<'coletor' | 'excel' | 'formulas'>('coletor');
+  const [torchOn, setTorchOn] = useState(false);
 
-Creating an internal distribution build requires [app signing credentials](/app-signing/app-credentials/).
+  // Passo 2 e 3: Congelamento da Câmera e OCR
+  const [isFrozen, setIsFrozen] = useState(false);
+  const [frozenPhotoUri, setFrozenPhotoUri] = useState<string | null>(null);
+  const [statusToast, setStatusToast] = useState<string | null>(null);
 
-Android app signing is non-restrictive and allows installing any compatible **.apk** file.
+  const panX = useRef(new Animated.Value(0)).current;
 
-On the other hand, Apple has stricter rules for app distribution on iOS devices. We need an ad hoc provisioning profile that explicitly lists the devices allowed to run the app. Some organizations whose apps meet specific requirements may be able to use the [Apple Developer Enterprise Program](https://developer.apple.com/programs/enterprise/) to distribute apps internally to a larger audience.
+  const showFeedback = (msg: string) => {
+    setStatusToast(msg);
+    setTimeout(() => setStatusToast(null), 2200);
+  };
 
-<Tabs>
+  const handleFreezeFrame = async () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    if (cameraRef.current && cameraPermission?.granted) {
+      try {
+        const photo = await cameraRef.current.takePictureAsync({ quality: 0.85, skipProcessing: true });
+        if (photo?.uri) setFrozenPhotoUri(photo.uri);
+      } catch {}
+    }
+    setIsFrozen(true);
+    showFeedback('Frame congelado · Toque nos dados para inserir');
+  };
 
-<Tab label="Android">
+  // Passo 5: Gestos Horizontais (Swipe Esquerda = Excluir | Swipe Direita = Salvar Galeria)
+  const panResponder = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dx) > 18 && Math.abs(g.dx) > Math.abs(g.dy),
+      onPanResponderMove: Animated.event([null, { dx: panX }], { useNativeDriver: false }),
+      onPanResponderRelease: async (_, g) => {
+        if (g.dx < -65) {
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+          setIsFrozen(false);
+          setFrozenPhotoUri(null);
+          showFeedback('← Captura excluída · Câmera pronta para nova coleta');
+        } else if (g.dx > 65) {
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          if (frozenPhotoUri) {
+            if (!mediaPermission?.granted) await requestMediaPermission();
+            await MediaLibrary.saveToLibraryAsync(frozenPhotoUri);
+          }
+          showFeedback('→ Imagem salva na Galeria de Fotos!');
+        }
+        Animated.spring(panX, { toValue: 0, useNativeDriver: false }).start();
+      },
+    })
+  ).current;
 
-- Use the `preview` profile to initiate an Android build:
+  // Passo 4: Inserção com Toque e Auto-Avanço
+  const handleSelectOcrChip = (chip: OcrChip) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setGrid((prev) => {
+      const next = prev.map((r) => r.map((c) => ({ ...c })));
+      next[activeCell.row][activeCell.col].raw = chip.cleanValue;
+      return next;
+    });
+    setActiveCell((prev) => {
+      if (autoAdvance === 'row') {
+        const nextCol = prev.col + 1;
+        if (nextCol < 4) return { row: prev.row, col: nextCol };
+        return { row: Math.min(11, prev.row + 1), col: 0 };
+      }
+      return { row: Math.min(11, prev.row + 1), col: prev.col };
+    });
+  };
 
-<Terminal cmd={['$ eas build --platform android --profile preview']} />
+  // Passo 6: Barra Vertical Translúcida na Extrema Direita (TAB, ▲, ►, ◄, ▼, ↵)
+  const navigateCell = (dir: 'tab' | 'up' | 'right' | 'left' | 'down' | 'enter') => {
+    Haptics.selectionAsync();
+    setActiveCell((prev) => {
+      if (dir === 'tab' || dir === 'right') {
+        return prev.col + 1 < 5
+          ? { row: prev.row, col: prev.col + 1 }
+          : { row: Math.min(11, prev.row + 1), col: 0 };
+      }
+      if (dir === 'left') return { row: prev.row, col: Math.max(0, prev.col - 1) };
+      if (dir === 'up') return { row: Math.max(0, prev.row - 1), col: prev.col };
+      if (dir === 'down') return { row: Math.min(11, prev.row + 1), col: prev.col };
+      if (dir === 'enter') return { row: Math.min(11, prev.row + 1), col: 0 };
+      return prev;
+    });
+  };
 
-- Since our preview build uses its own Android Application ID from the previous chapter, EAS CLI prompts us to **Generate a new Android Keystore**. Press <kbd>Y</kbd>.
-- This command triggers the EAS Build, and on the EAS dashboard, we can see the build's progress:
+  const handleExportExcel = async () => {
+    const aoa = grid.map((r) => r.map((c) => c.raw));
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Inventario');
+    const wbout = XLSX.write(wb, { type: 'base64', bookType: 'xlsx' });
+    const uri = FileSystem.cacheDirectory + 'Inventario_2026.xlsx';
+    await FileSystem.writeAsStringAsync(uri, wbout, { encoding: FileSystem.EncodingType.Base64 });
+    await Sharing.shareAsync(uri);
+  };
 
-<ContentSpotlight
-  alt="Android preview build details and progress in EAS dashboard"
-  src="/static/images/tutorial/eas/internal-distribution-builds-android-preview-build.webp"
-  className="max-w-[800px]"
-/>
+  const activeCellRef = `${COLS[activeCell.col]}${activeCell.row + 1}`;
 
-</Tab>
+  return (
+    <SafeAreaView style={styles.container}>
+      <View style={styles.header}>
+        <Text style={styles.brand}>VisionSheet Expo</Text>
+        <Text style={styles.activeBadge}>Célula: {activeCellRef}</Text>
+        <TouchableOpacity style={styles.exportBtn} onPress={handleExportExcel}>
+          <Text style={styles.exportBtnText}>Exportar .xlsx</Text>
+        </TouchableOpacity>
+      </View>
 
-<Tab label="iOS">
+      {/* METADE SUPERIOR: Planilha Excel */}
+      <View style={styles.topHalf}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+          <ScrollView>
+            {grid.map((row, rIdx) => (
+              <View key={rIdx} style={styles.row}>
+                <View style={styles.rowNumCell}>
+                  <Text style={styles.rowNumText}>{rIdx + 1}</Text>
+                </View>
+                {row.map((cell, cIdx) => {
+                  const isSelected = activeCell.row === rIdx && activeCell.col === cIdx;
+                  return (
+                    <TouchableOpacity
+                      key={cIdx}
+                      onPress={() => setActiveCell({ row: rIdx, col: cIdx })}
+                      style={[
+                        styles.cell,
+                        rIdx === 0 && styles.headerCell,
+                        isSelected && styles.activeCellBorder,
+                      ]}
+                    >
+                      <Text
+                        numberOfLines={1}
+                        style={[
+                          styles.cellText,
+                          cell.bold && { fontWeight: '700' },
+                          rIdx === 0 && { color: '#34d399' },
+                        ]}
+                      >
+                        {cell.raw || (isSelected ? `[${activeCellRef}]` : '')}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            ))}
+          </ScrollView>
+        </ScrollView>
+      </View>
 
-Apps signed with an ad hoc provisioning profile can be installed by an iOS device whose UDID is registered with the provisioning profile.
+      {/* BARRA INTERMEDIÁRIA: fx + Botão Translúcido (*) */}
+      <View style={styles.middleBar}>
+        <View style={styles.formulaRow}>
+          <Text style={styles.fxLabel}>fx</Text>
+          <TextInput
+            style={styles.fxInput}
+            value={grid[activeCell.row][activeCell.col].raw}
+            onChangeText={(txt) => {
+              setGrid((prev) => {
+                const next = prev.map((r) => r.map((c) => ({ ...c })));
+                next[activeCell.row][activeCell.col].raw = txt;
+                return next;
+              });
+            }}
+            placeholder={`Editar ${activeCellRef} ou =SOMA(...)`}
+            placeholderTextColor="#64748b"
+          />
+          <TouchableOpacity style={styles.translucentToggleBtn} onPress={() => setShowRibbon(!showRibbon)}>
+            <Text style={styles.translucentToggleText}>{showRibbon ? '(*) Ocultar' : '(*) Excel & IA'}</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
 
-- To register more devices, use `eas device:create`. This command registers an iOS device and gives us a URL or QR code to share for device registration:
+      {/* METADE INFERIOR: Câmera + OCR + Barra Vertical Translúcida (Passo 6) */}
+      <View style={styles.bottomHalf}>
+        <Animated.View
+          {...(isFrozen ? panResponder.panHandlers : {})}
+          style={[styles.cameraContainer, { transform: [{ translateX: panX }] }]}
+        >
+          {!isFrozen ? (
+            <TouchableOpacity activeOpacity={0.9} style={styles.liveViewfinder} onPress={handleFreezeFrame}>
+              {cameraPermission?.granted && (
+                <CameraView ref={cameraRef} style={StyleSheet.absoluteFill} facing="back" enableTorch={torchOn} />
+              )}
+              <View style={styles.freezePromptBox}>
+                <Text style={styles.freezePromptTitle}>Toque para Congelar Frame & Ler OCR</Text>
+              </View>
+            </TouchableOpacity>
+          ) : (
+            <View style={styles.frozenSurface}>
+              {frozenPhotoUri && <Image source={{ uri: frozenPhotoUri }} style={StyleSheet.absoluteFill} />}
+              {INITIAL_OCR_CHIPS.map((chip) => (
+                <TouchableOpacity
+                  key={chip.id}
+                  onPress={() => handleSelectOcrChip(chip)}
+                  style={[
+                    styles.ocrBoundingBox,
+                    { left: `${chip.x}%`, top: `${chip.y}%`, width: `${chip.w}%`, height: `${chip.h}%` },
+                  ]}
+                >
+                  <Text numberOfLines={1} style={styles.ocrText}>{chip.text}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+        </Animated.View>
 
-<Terminal cmd={['$ eas device:create']} />
+        {/* PASSO 6: Barra Vertical Translúcida na Extrema Direita (TAB, ▲, ►, ◄, ▼, ↵) */}
+        <View style={styles.rightVerticalDpad}>
+          <TouchableOpacity style={styles.dpadBtn} onPress={() => navigateCell('tab')}>
+            <Text style={styles.dpadBtnText}>TAB</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.dpadBtn} onPress={() => navigateCell('up')}>
+            <Text style={styles.dpadBtnText}>▲</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.dpadBtn} onPress={() => navigateCell('right')}>
+            <Text style={styles.dpadBtnText}>►</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.dpadBtn} onPress={() => navigateCell('left')}>
+            <Text style={styles.dpadBtnText}>◄</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.dpadBtn} onPress={() => navigateCell('down')}>
+            <Text style={styles.dpadBtnText}>▼</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.dpadBtn, styles.dpadEnterBtn]} onPress={() => navigateCell('enter')}>
+            <Text style={[styles.dpadBtnText, { color: '#022c22' }]}>↵</Text>
+          </TouchableOpacity>
+        </View>
 
-- This command registers an iOS device for app installation, generating a shareable URL (or QR code) for device registration.
+        {statusToast && (
+          <View style={styles.toastBanner}>
+            <Text style={styles.toastText}>{statusToast}</Text>
+          </View>
+        )}
+      </View>
+    </SafeAreaView>
+  );
+}
 
-  > **info** **Tip**: This command enables device registration at any time. However, only builds created post-registration will work on the newly added device.
-
-  > **warning** **On a new or recently renewed Apple Developer Program membership, a newly registered device may not be immediately installable.** Registering a device with Expo does not register it with Apple. The device is added to Apple only when it's first included in a build or re-sign. For such a membership, Apple can then take [up to 24–72 hours](https://developer.apple.com/help/account/reference/device-registration-updates/) to finish processing the device before it can be added to a provisioning profile. If a build fails right after you register a new device, wait for Apple to finish processing and then run the build again. Learn more about [managing devices](/build/internal-distribution/#managing-devices).
-
-- To create the preview build, we need to use the `preview` profile with the `eas build` command:
-
-<Terminal cmd={['$ eas build --platform ios --profile preview']} />
-
-- This command triggers the EAS Build, and on the EAS dashboard, we can see the build's progress:
-
-<ContentSpotlight
-  alt="iOS preview build details and progress in EAS dashboard"
-  src="/static/images/tutorial/eas/internal-distribution-builds-ios-preview-build.webp"
-  className="max-w-[800px]"
-/>
-
-<Collapsible summary={<>Alternative method to register devices using <CODE>eas build:resign</CODE></>}>
-
-[`eas build:resign`](/app-signing/app-credentials/#re-signing-new-credentials) command can be used to re-sign an existing iOS **.ipa** with a new ad hoc provisioning profile, eliminating the need for a full rebuild.
-
-</Collapsible>
-
-<Collapsible summary="Are you setting up enterprise provisioning?">
-
-Apple Enterprise Program membership costs $299 USD per year and [not all organizations will be eligible](https://developer.apple.com/programs/enterprise/), so you will likely be using ad hoc provisioning, which works with any normal paid Apple Developer account.
-
-If you have an [Apple Developer Enterprise Program membership](https://developer.apple.com/programs/enterprise/) users can install your app to their device without pre-registering their UDID. They just need to install the profile to their device and they can then access existing builds. You will need to sign in using your Apple Developer Enterprise account during the `eas build` process to set up the correct provisioning.
-
-If you distribute your app both through enterprise provisioning and the App Store, you will need to have a distinct bundle identifier for each context. We recommend either:
-
-- In projects generated with Expo CLI, use [**app.config.js** to dynamically switch identifiers](/tutorial/eas/multiple-app-variants/).
-- In [existing React Native projects](/bare/overview/), create a separate `scheme` for each bundle identifier and specify the scheme name in separate build profiles.
-
-</Collapsible>
-
-<Collapsible summary="Are you using manual local credentials?">
-
-If so, make sure to point your **credentials.json** to an ad hoc or enterprise provisioning profile that you generate through the Apple Developer Portal (either update an existing **credentials.json** used for another type of distribution or replace it with a new one that points to the appropriate provisioning profile). Beware that EAS CLI does only a limited validation of your local credentials, and you will have to handle device UDID registration manually. Read more about [using local credentials](/app-signing/local-credentials).
-
-</Collapsible>
-
-</Tab>
-
-</Tabs>
-
-</Step>
-
-<Step label="3">
-
-### Install
-
-Once the build finishes, the Build artifact section shows that the build is complete. This section provides the methods available for running the preview build on an Android or iOS device: Expo Orbit and the Install button.
-
-- Open the build's detail page. If you are sharing the build with someone else, you can send them the link to the build. They'll be able to open the build's detail page or build artifact details which include Expo Orbit.
-- Connect the Android or iOS device to your machine using USB.
-- Open the Orbit menu bar app.
-- Select the **Device** in the Orbit app.
-- Under **Build artifact**, click the **Open with Orbit**.
-
-<Collapsible summary="Alternate: Use Install and QR code">
-
-- Open the build's detail page. If you are sharing the build with someone else, you can send them the link to the build page. They'll be able to open it and see build artifact details which includes Expo Orbit.
-- Click **Install** under the Build artifact section to display the **Install on a test device** popup.
-- Copy the link from **Send a link to a device** section and send it to the test device.
-
-<ContentSpotlight
-  alt="Install on a test device popup with a QR code and an install link in EAS dashboard"
-  src="/static/images/tutorial/eas/android-development-build-qr-code.webp"
-  className="max-w-[450px]"
-/>
-
-</Collapsible>
-
-</Step>
-
-<Step label="4">
-
-### Run
-
-Tap the app icon on your device to start the preview build. There is no need for a development server.
-
-Since we have already set up multiple app variants, we can see both the development and preview variants installed separately on our devices. For example:
-
-- On Android:
-
-<ContentSpotlight
-  alt="Development and preview variants installed on an Android device"
-  src="/static/images/tutorial/eas/android-multi-variants-installed.png"
-  className="max-w-[270px]"
-/>
-
-- On iOS:
-
-<ContentSpotlight
-  alt="Development and preview variants installed on an iOS device"
-  src="/static/images/tutorial/eas/ios-multi-variants-installed.webp"
-  className="max-w-[250px]"
-/>
-
-</Step>
-
-## Summary
-
-<ProgressTracker
-  name="EAS_TUTORIAL"
-  currentChapterSlug="/tutorial/eas/internal-distribution-builds"
-/>
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#020617' },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#1e293b' },
+  brand: { color: '#f8fafc', fontSize: 15, fontWeight: '700' },
+  activeBadge: { color: '#34d399', fontSize: 12, fontWeight: '700' },
+  exportBtn: { backgroundColor: '#10b981', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 },
+  exportBtnText: { color: '#022c22', fontSize: 12, fontWeight: '700' },
+  topHalf: { flex: 0.44, backgroundColor: '#090d16' },
+  row: { flexDirection: 'row' },
+  rowNumCell: { width: 34, height: 36, backgroundColor: '#0f172a', borderRightWidth: 1, borderBottomWidth: 1, borderColor: '#1e293b', alignItems: 'center', justifyContent: 'center' },
+  rowNumText: { color: '#64748b', fontSize: 11 },
+  cell: { width: 105, height: 36, borderRightWidth: 1, borderBottomWidth: 1, borderColor: '#1e293b', justifyContent: 'center', paddingHorizontal: 8 },
+  headerCell: { backgroundColor: '#1e293b' },
+  activeCellBorder: { borderWidth: 2, borderColor: '#10b981', backgroundColor: 'rgba(16, 185, 129, 0.14)' },
+  cellText: { color: '#f1f5f9', fontSize: 12 },
+  middleBar: { backgroundColor: '#0f172a', borderTopWidth: 1, borderBottomWidth: 1, borderColor: '#1e293b', paddingHorizontal: 10, paddingVertical: 6 },
+  formulaRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  fxLabel: { color: '#34d399', fontWeight: '700', fontStyle: 'italic', fontSize: 13 },
+  fxInput: { flex: 1, backgroundColor: '#020617', color: '#f8fafc', fontSize: 12, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6, borderWidth: 1, borderColor: '#1e293b' },
+  translucentToggleBtn: { backgroundColor: 'rgba(255,255,255,0.1)', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)' },
+  translucentToggleText: { color: '#e2e8f0', fontSize: 11, fontWeight: '600' },
+  bottomHalf: { flex: 0.56, position: 'relative', backgroundColor: '#020617' },
+  cameraContainer: { flex: 1, marginRight: 66, margin: 8, borderRadius: 14, overflow: 'hidden' },
+  liveViewfinder: { flex: 1, backgroundColor: '#0f172a', alignItems: 'center', justifyContent: 'center' },
+  freezePromptBox: { backgroundColor: 'rgba(2, 6, 23, 0.85)', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 12, borderWidth: 1, borderColor: '#10b981' },
+  freezePromptTitle: { color: '#f8fafc', fontSize: 12, fontWeight: '700' },
+  frozenSurface: { flex: 1, backgroundColor: '#f8fafc' },
+  ocrBoundingBox: { position: 'absolute', backgroundColor: 'rgba(16, 185, 129, 0.22)', borderWidth: 2, borderColor: '#059669', borderRadius: 6, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4 },
+  ocrText: { color: '#020617', fontSize: 11, fontWeight: '700' },
+  rightVerticalDpad: { position: 'absolute', right: 6, top: 8, bottom: 8, width: 54, backgroundColor: 'rgba(15, 23, 42, 0.72)', borderRadius: 16, borderWidth: 1, borderColor: 'rgba(255,255,255,0.18)', padding: 4, justifyContent: 'space-between' },
+  dpadBtn: { flex: 1, marginVertical: 2, backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  dpadEnterBtn: { backgroundColor: '#10b981' },
+  dpadBtnText: { color: '#f8fafc', fontSize: 12, fontWeight: '700' },
+  toastBanner: { position: 'absolute', top: 14, left: 16, right: 76, backgroundColor: 'rgba(2, 6, 23, 0.92)', paddingVertical: 8, paddingHorizontal: 12, borderRadius: 10, borderWidth: 1, borderColor: '#10b981' },
+  toastText: { color: '#34d399', fontSize: 11, fontWeight: '600', textAlign: 'center' },
+});
